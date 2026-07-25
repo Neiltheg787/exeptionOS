@@ -1,8 +1,8 @@
 "use client";
 
-import { AlertTriangle, Check, Loader2, RotateCcw, Save, Send, ShieldAlert, X } from "lucide-react";
+import { AlertTriangle, Check, Loader2, Pause, Play, RotateCcw, Save, Send, ShieldAlert, X } from "lucide-react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { defaultScenarioId, demoScenarios, getScenario } from "@/data/scenarios";
 import type {
   AggregatedDecision,
@@ -42,6 +42,53 @@ const outcomePresets: Record<string, string> = {
   "waste-watch": "Reduced batch prepared. 7 p.m. checkpoint prevented overprep without stockout.",
 };
 
+type GuidedDemoStep = {
+  scenarioId: string;
+  query: string;
+  moment: string;
+  voiceover: string;
+  saveOutcome?: boolean;
+};
+
+const demoSteps: GuidedDemoStep[] = [
+  {
+    scenarioId: "supplier-loop",
+    query: "Our supplier offered Harvest Gold Lot B again. Should we accept it?",
+    moment: "01 / MEMORY MAKES THE DECISION POSSIBLE",
+    voiceover:
+      "We start with a supplier substitution that looks ordinary until EXCEPTION//OS remembers the exact lot failed before and also remembers the fallback that worked.",
+  },
+  {
+    scenarioId: "fryer-ghost",
+    query: "The fryer temperature is fluctuating. Can we use last month's workaround?",
+    moment: "02 / OLD MEMORY IS NOT ALWAYS VALID",
+    voiceover:
+      "Here the system does more than retrieve an old workaround. It notices that the procedure was retired after repair, so it blocks a stale operational habit.",
+  },
+  {
+    scenarioId: "rush-protocol",
+    query: "A concert ends nearby in 90 minutes and two employees called out.",
+    moment: "03 / RECURRING PATTERN TO PLAYBOOK",
+    voiceover:
+      "For a rush, the agent recalls the previous bottleneck, finds the later successful protocol, and turns that memory into a concrete staffing and menu playbook.",
+  },
+  {
+    scenarioId: "allergy-lock",
+    query: "Can we remove the cheese to make this dish dairy-free?",
+    moment: "04 / SAFETY OVERRIDES SPEED",
+    voiceover:
+      "Safety scenarios take priority. The allergy agent blocks informal modification, cites the hidden butter risk, and requires restaurant staff confirmation.",
+  },
+  {
+    scenarioId: "supplier-loop",
+    query: "Our supplier offered Harvest Gold Lot B again. Should we accept it?",
+    moment: "05 / THE OUTCOME BECOMES MEMORY",
+    voiceover:
+      "After the manager accepts the recommendation, the result is saved back to memory, so the next shift starts smarter than this one did.",
+    saveOutcome: true,
+  },
+];
+
 function isTypingTarget(target: EventTarget | null) {
   if (!(target instanceof HTMLElement)) return false;
   return ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName) || target.isContentEditable;
@@ -67,6 +114,12 @@ export function WarRoom() {
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [healthState, setHealthState] = useState<"idle" | "loading" | "success" | "error">("idle");
   const [seedState, setSeedState] = useState<"idle" | "loading" | "success" | "error">("idle");
+  const [demoState, setDemoState] = useState<"idle" | "running" | "paused" | "done">("idle");
+  const [demoIndex, setDemoIndex] = useState(0);
+  const [demoCaption, setDemoCaption] = useState<string>(demoSteps[0].voiceover);
+  const demoAbortRef = useRef(false);
+
+  const wait = useCallback((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)), []);
 
   const setActiveScenario = useCallback(
     (nextScenarioId: string) => {
@@ -92,7 +145,7 @@ export function WarRoom() {
     }
   }, [params, pathname, router]);
 
-  const ask = useCallback(async () => {
+  const ask = useCallback(async (forcedScenarioId = scenarioId, forcedQuery = query) => {
     setAskState("loading");
     setOutcomeState("idle");
     setMemoryEvent(null);
@@ -101,15 +154,17 @@ export function WarRoom() {
       const result = await fetch("/api/ask", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ scenarioId, query }),
+        body: JSON.stringify({ scenarioId: forcedScenarioId, query: forcedQuery }),
       });
       const json = await result.json();
       if (!result.ok) throw new Error(json.message ?? "Recall failed");
       setResponse(json);
       setAskState("success");
+      return json as AskResponse;
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Recall failed");
       setAskState("error");
+      return null;
     }
   }, [query, scenarioId]);
 
@@ -202,6 +257,69 @@ export function WarRoom() {
     }
   }, [checkHealth]);
 
+  const stopDemo = useCallback(() => {
+    demoAbortRef.current = true;
+    setDemoState("paused");
+  }, []);
+
+  const startDemo = useCallback(async () => {
+    demoAbortRef.current = false;
+    setDemoState("running");
+    setMemoryEvent(null);
+    setError("");
+
+    for (let index = 0; index < demoSteps.length; index += 1) {
+      if (demoAbortRef.current) return;
+      const step = demoSteps[index];
+      const next = getScenario(step.scenarioId);
+      setDemoIndex(index);
+      setDemoCaption(step.voiceover);
+      setScenarioId(next.id);
+      setQuery(step.query);
+      setResponse(null);
+      setOutcome(outcomePresets[next.id]);
+      setAskState("idle");
+      setOutcomeState("idle");
+      router.replace(`${pathname}?scenario=${next.id}&demo=1`, { scroll: false });
+      await wait(900);
+      if (demoAbortRef.current) return;
+
+      const result = await ask(next.id, step.query);
+      await wait(step.saveOutcome ? 1600 : 4300);
+      if (demoAbortRef.current) return;
+
+      if (step.saveOutcome && result) {
+        setOutcomeState("saving");
+        const saveResult = await fetch("/api/outcome", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            scenarioId: next.id,
+            query: step.query,
+            managerAction: "ACCEPTED",
+            outcomeStatus: "SUCCESS",
+            note: outcomePresets[next.id],
+            decisionHeadline: result.decision.headline,
+            agentIds: [result.decision.primaryAgent, ...result.decision.supportingAgents],
+          }),
+        });
+        const json = await saveResult.json();
+        if (saveResult.ok) {
+          setMemoryEvent(json);
+          setOutcomeState("success");
+        } else {
+          setError(json.message ?? "Outcome save failed");
+          setOutcomeState("error");
+        }
+        await wait(3600);
+      }
+    }
+
+    setDemoState("done");
+    setDemoCaption("Demo complete. EXCEPTION//OS has shown recall, routing, safety priority, playbooks, and memory writeback.");
+    router.replace(`${pathname}?scenario=${scenarioId}`, { scroll: false });
+  }, [ask, pathname, router, scenarioId, wait]);
+
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
       if (isTypingTarget(event.target)) return;
@@ -212,10 +330,14 @@ export function WarRoom() {
       if (event.key.toLowerCase() === "a" && response) void saveOutcome("ACCEPTED");
       if (event.key.toLowerCase() === "l") void saveOutcome("LOGGED");
       if (event.key.toLowerCase() === "x") void resetScenario();
+      if (event.key.toLowerCase() === "d") {
+        if (demoState === "running") stopDemo();
+        else void startDemo();
+      }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [ask, resetScenario, response, saveOutcome, setActiveScenario]);
+  }, [ask, demoState, resetScenario, response, saveOutcome, setActiveScenario, startDemo, stopDemo]);
 
   const displayDecision = response?.decision;
   const strongestMemories = useMemo(
@@ -256,12 +378,37 @@ export function WarRoom() {
                 <h1 className="mt-1 text-xl font-black tracking-normal text-[#79ffb8]">RESTAURANT INTELLIGENCE COMMAND CENTER</h1>
                 <p className="mt-1 text-[#c7d6ce]">{scenario.description}</p>
               </div>
-              <div className="border border-[#ffce65] px-3 py-2 text-right text-[#ffce65]">
-                <div className="text-[10px]">NEON KITCHEN WAR ROOM</div>
-                <div className="text-xl">{scenario.cartridgeNumber}</div>
+              <div className="flex items-start gap-2">
+                <button
+                  className="hard-button flex items-center gap-2 px-3 py-2 text-[#ffce65]"
+                  onClick={() => (demoState === "running" ? stopDemo() : void startDemo())}
+                >
+                  {demoState === "running" ? <Pause size={15} /> : <Play size={15} />}
+                  {demoState === "running" ? "PAUSE DEMO" : "AUTO DEMO"}
+                </button>
+                <div className="border border-[#ffce65] px-3 py-2 text-right text-[#ffce65]">
+                  <div className="text-[10px]">NEON KITCHEN WAR ROOM</div>
+                  <div className="text-xl">{scenario.cartridgeNumber}</div>
+                </div>
               </div>
             </div>
           </header>
+
+          <section className={`hard-panel p-3 ${demoState === "running" ? "border-[#ffce65]" : ""}`}>
+            <div className="flex items-center justify-between gap-3 text-[#ffce65]">
+              <span>GUIDED DEMO MODE</span>
+              <span>{demoState === "running" ? demoSteps[demoIndex].moment : demoState === "done" ? "COMPLETE" : "READY"} · [D]</span>
+            </div>
+            <p className="mt-2 text-base leading-6 text-[#f4f7ee]">{demoCaption}</p>
+            <div className="mt-2 grid grid-cols-5 gap-2">
+              {demoSteps.map((step, index) => (
+                <div
+                  key={`${step.scenarioId}-${step.moment}`}
+                  className={`h-2 border ${index <= demoIndex && demoState !== "idle" ? "border-[#79ffb8] bg-[#79ffb8]" : "border-[#33414a]"}`}
+                />
+              ))}
+            </div>
+          </section>
 
           <div className="grid grid-cols-[1.05fr_1fr] gap-4 max-lg:grid-cols-1">
             <section className="hard-panel p-3">
@@ -286,7 +433,7 @@ export function WarRoom() {
                 className="h-24 w-full resize-none border border-[#33414a] bg-[#07090c] p-3 text-[#f4f7ee] outline-none focus:border-[#79ffb8]"
               />
               <div className="mt-3 flex flex-wrap gap-2">
-                <button className="hard-button flex items-center gap-2 px-3 py-2" onClick={ask} disabled={askState === "loading"}>
+                <button className="hard-button flex items-center gap-2 px-3 py-2" onClick={() => void ask()} disabled={askState === "loading"}>
                   {askState === "loading" ? <Loader2 className="animate-spin" size={15} /> : <Send size={15} />}
                   RECALL TRACE
                 </button>
