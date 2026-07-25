@@ -1,8 +1,20 @@
 "use client";
 
-import { AlertTriangle, Check, Loader2, Pause, Play, RotateCcw, Save, Send, ShieldAlert, X } from "lucide-react";
+import {
+  AlertTriangle,
+  Check,
+  Database,
+  Loader2,
+  Radar,
+  RotateCcw,
+  Save,
+  Send,
+  ShieldAlert,
+  Sparkles,
+  X,
+} from "lucide-react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { defaultScenarioId, demoScenarios, getScenario } from "@/data/scenarios";
 import type {
   AggregatedDecision,
@@ -42,56 +54,15 @@ const outcomePresets: Record<string, string> = {
   "waste-watch": "Reduced batch prepared. 7 p.m. checkpoint prevented overprep without stockout.",
 };
 
-type GuidedDemoStep = {
-  scenarioId: string;
-  query: string;
-  moment: string;
-  voiceover: string;
-  saveOutcome?: boolean;
-};
-
-const demoSteps: GuidedDemoStep[] = [
-  {
-    scenarioId: "supplier-loop",
-    query: "Our supplier offered Harvest Gold Lot B again. Should we accept it?",
-    moment: "01 / MEMORY MAKES THE DECISION POSSIBLE",
-    voiceover:
-      "We start with a supplier substitution that looks ordinary until EXCEPTION//OS remembers the exact lot failed before and also remembers the fallback that worked.",
-  },
-  {
-    scenarioId: "fryer-ghost",
-    query: "The fryer temperature is fluctuating. Can we use last month's workaround?",
-    moment: "02 / OLD MEMORY IS NOT ALWAYS VALID",
-    voiceover:
-      "Here the system does more than retrieve an old workaround. It notices that the procedure was retired after repair, so it blocks a stale operational habit.",
-  },
-  {
-    scenarioId: "rush-protocol",
-    query: "A concert ends nearby in 90 minutes and two employees called out.",
-    moment: "03 / RECURRING PATTERN TO PLAYBOOK",
-    voiceover:
-      "For a rush, the agent recalls the previous bottleneck, finds the later successful protocol, and turns that memory into a concrete staffing and menu playbook.",
-  },
-  {
-    scenarioId: "allergy-lock",
-    query: "Can we remove the cheese to make this dish dairy-free?",
-    moment: "04 / SAFETY OVERRIDES SPEED",
-    voiceover:
-      "Safety scenarios take priority. The allergy agent blocks informal modification, cites the hidden butter risk, and requires restaurant staff confirmation.",
-  },
-  {
-    scenarioId: "supplier-loop",
-    query: "Our supplier offered Harvest Gold Lot B again. Should we accept it?",
-    moment: "05 / THE OUTCOME BECOMES MEMORY",
-    voiceover:
-      "After the manager accepts the recommendation, the result is saved back to memory, so the next shift starts smarter than this one did.",
-    saveOutcome: true,
-  },
-];
-
 function isTypingTarget(target: EventTarget | null) {
   if (!(target instanceof HTMLElement)) return false;
   return ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName) || target.isContentEditable;
+}
+
+function statusTone(ok?: boolean) {
+  if (ok === true) return "border-emerald-400/35 bg-emerald-400/10 text-emerald-200";
+  if (ok === false) return "border-amber-400/35 bg-amber-400/10 text-amber-100";
+  return "border-white/10 bg-white/[0.04] text-slate-300";
 }
 
 export function WarRoom() {
@@ -114,12 +85,6 @@ export function WarRoom() {
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [healthState, setHealthState] = useState<"idle" | "loading" | "success" | "error">("idle");
   const [seedState, setSeedState] = useState<"idle" | "loading" | "success" | "error">("idle");
-  const [demoState, setDemoState] = useState<"idle" | "running" | "paused" | "done">("idle");
-  const [demoIndex, setDemoIndex] = useState(0);
-  const [demoCaption, setDemoCaption] = useState<string>(demoSteps[0].voiceover);
-  const demoAbortRef = useRef(false);
-
-  const wait = useCallback((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)), []);
 
   const setActiveScenario = useCallback(
     (nextScenarioId: string) => {
@@ -140,12 +105,12 @@ export function WarRoom() {
   );
 
   useEffect(() => {
-    if (!demoScenarios.some((item) => item.id === params.get("scenario"))) {
-      router.replace(`${pathname}?scenario=${defaultScenarioId}`, { scroll: false });
+    if (!demoScenarios.some((item) => item.id === params.get("scenario")) || params.has("demo")) {
+      router.replace(`${pathname}?scenario=${initialScenario}`, { scroll: false });
     }
-  }, [params, pathname, router]);
+  }, [initialScenario, params, pathname, router]);
 
-  const ask = useCallback(async (forcedScenarioId = scenarioId, forcedQuery = query) => {
+  const ask = useCallback(async () => {
     setAskState("loading");
     setOutcomeState("idle");
     setMemoryEvent(null);
@@ -154,17 +119,15 @@ export function WarRoom() {
       const result = await fetch("/api/ask", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ scenarioId: forcedScenarioId, query: forcedQuery }),
+        body: JSON.stringify({ scenarioId, query }),
       });
       const json = await result.json();
       if (!result.ok) throw new Error(json.message ?? "Recall failed");
       setResponse(json);
       setAskState("success");
-      return json as AskResponse;
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Recall failed");
       setAskState("error");
-      return null;
     }
   }, [query, scenarioId]);
 
@@ -257,69 +220,6 @@ export function WarRoom() {
     }
   }, [checkHealth]);
 
-  const stopDemo = useCallback(() => {
-    demoAbortRef.current = true;
-    setDemoState("paused");
-  }, []);
-
-  const startDemo = useCallback(async () => {
-    demoAbortRef.current = false;
-    setDemoState("running");
-    setMemoryEvent(null);
-    setError("");
-
-    for (let index = 0; index < demoSteps.length; index += 1) {
-      if (demoAbortRef.current) return;
-      const step = demoSteps[index];
-      const next = getScenario(step.scenarioId);
-      setDemoIndex(index);
-      setDemoCaption(step.voiceover);
-      setScenarioId(next.id);
-      setQuery(step.query);
-      setResponse(null);
-      setOutcome(outcomePresets[next.id]);
-      setAskState("idle");
-      setOutcomeState("idle");
-      router.replace(`${pathname}?scenario=${next.id}&demo=1`, { scroll: false });
-      await wait(900);
-      if (demoAbortRef.current) return;
-
-      const result = await ask(next.id, step.query);
-      await wait(step.saveOutcome ? 1600 : 4300);
-      if (demoAbortRef.current) return;
-
-      if (step.saveOutcome && result) {
-        setOutcomeState("saving");
-        const saveResult = await fetch("/api/outcome", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            scenarioId: next.id,
-            query: step.query,
-            managerAction: "ACCEPTED",
-            outcomeStatus: "SUCCESS",
-            note: outcomePresets[next.id],
-            decisionHeadline: result.decision.headline,
-            agentIds: [result.decision.primaryAgent, ...result.decision.supportingAgents],
-          }),
-        });
-        const json = await saveResult.json();
-        if (saveResult.ok) {
-          setMemoryEvent(json);
-          setOutcomeState("success");
-        } else {
-          setError(json.message ?? "Outcome save failed");
-          setOutcomeState("error");
-        }
-        await wait(3600);
-      }
-    }
-
-    setDemoState("done");
-    setDemoCaption("Demo complete. EXCEPTION//OS has shown recall, routing, safety priority, playbooks, and memory writeback.");
-    router.replace(`${pathname}?scenario=${scenarioId}`, { scroll: false });
-  }, [ask, pathname, router, scenarioId, wait]);
-
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
       if (isTypingTarget(event.target)) return;
@@ -330,164 +230,192 @@ export function WarRoom() {
       if (event.key.toLowerCase() === "a" && response) void saveOutcome("ACCEPTED");
       if (event.key.toLowerCase() === "l") void saveOutcome("LOGGED");
       if (event.key.toLowerCase() === "x") void resetScenario();
-      if (event.key.toLowerCase() === "d") {
-        if (demoState === "running") stopDemo();
-        else void startDemo();
-      }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [ask, demoState, resetScenario, response, saveOutcome, setActiveScenario, startDemo, stopDemo]);
+  }, [ask, resetScenario, response, saveOutcome, setActiveScenario]);
 
   const displayDecision = response?.decision;
   const strongestMemories = useMemo(
     () => (displayDecision?.evidence ?? scenario.historicalMemories).slice(0, 2),
     [displayDecision, scenario.historicalMemories],
   );
+  const confidence = displayDecision?.confidence ?? scenario.expectedRecommendation.confidence;
+  const activeAgents = response
+    ? [response.decision.primaryAgent, ...response.decision.supportingAgents]
+    : ["ORCHESTRATOR"];
 
   return (
-    <main className="scanline min-h-screen px-4 py-2 text-[12px] text-[#f4f7ee]">
-      <div className="mx-auto grid max-w-[1440px] grid-cols-[300px_1fr_360px] gap-4 max-xl:grid-cols-[280px_1fr] max-lg:grid-cols-1">
-        <aside className="hard-panel p-3">
-          <div className="mb-3 border-b border-[#79ffb866] pb-2 text-[11px] text-[#ffce65]">INCIDENT CARTRIDGES</div>
+    <main className="min-h-screen px-5 py-5 text-sm text-slate-100">
+      <div className="mx-auto grid max-w-[1480px] grid-cols-[292px_minmax(0,1fr)_340px] gap-5 max-xl:grid-cols-[280px_1fr] max-lg:grid-cols-1">
+        <aside className="modern-panel sticky top-5 h-[calc(100vh-40px)] p-4 max-lg:static max-lg:h-auto">
+          <div className="mb-5 flex items-center justify-between">
+            <div>
+              <p className="eyebrow">Workspace</p>
+              <h2 className="text-base font-semibold text-white">Incident cartridges</h2>
+            </div>
+            <div className="rounded-full border border-violet-400/30 bg-violet-400/10 px-2.5 py-1 text-xs text-violet-200">
+              {demoScenarios.length}
+            </div>
+          </div>
+
           <div className="space-y-2">
             {demoScenarios.map((item) => (
               <button
                 key={item.id}
                 onClick={() => setActiveScenario(item.id)}
-                className={`w-full border px-3 py-2 text-left ${item.id === scenarioId ? "loaded border-[#79ffb8]" : "border-[#33414a] text-[#b7c8c0] hover:border-[#79ffb8]"}`}
+                className={`scenario-button ${item.id === scenarioId ? "scenario-button-active" : ""}`}
               >
-                <div className="flex items-center justify-between gap-2">
-                  <span>{item.cartridgeNumber} {item.title}</span>
-                  <span className="text-[10px]">{item.id === scenarioId ? "LOADED" : item.cartridgeNumber <= "04" ? "CORE" : "NICE"}</span>
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-xs text-slate-400">{item.cartridgeNumber}</span>
+                  <span className="flex-1 truncate text-left font-medium">{item.title}</span>
+                  <span className="rounded-full bg-white/[0.05] px-2 py-0.5 text-[10px] text-slate-300">
+                    {item.category}
+                  </span>
                 </div>
-                <div className="mt-1 text-[10px] text-[#68d8ff]">{item.category} / {item.memoryTypes.join("+")}</div>
+                <div className="mt-2 flex flex-wrap gap-1">
+                  {item.memoryTypes.slice(0, 3).map((type) => (
+                    <span key={type} className="memory-chip">
+                      {type}
+                    </span>
+                  ))}
+                </div>
               </button>
             ))}
           </div>
-          <div className="mt-4 border-t border-[#33414a] pt-3 text-[10px] leading-5 text-[#9aa8a0]">
-            [1-6] Cartridge · [R] Recall · [A] Accept · [L] Log · [X] Reset
+
+          <div className="mt-5 rounded-lg border border-white/10 bg-white/[0.03] p-3 text-xs leading-5 text-slate-400">
+            Shortcuts: `1-6` switch cartridges, `R` recalls, `A` accepts, `L` logs, `X` resets.
           </div>
         </aside>
 
-        <section className="space-y-4">
-          <header className="hard-panel px-4 py-2">
-            <div className="flex items-start justify-between gap-3">
+        <section className="space-y-5">
+          <header className="modern-panel overflow-hidden p-5">
+            <div className="flex items-start justify-between gap-5 max-md:flex-col">
               <div>
-                <div className="text-[11px] text-[#68d8ff]">EXCEPTION//OS</div>
-                <h1 className="mt-1 text-xl font-black tracking-normal text-[#79ffb8]">RESTAURANT INTELLIGENCE COMMAND CENTER</h1>
-                <p className="mt-1 text-[#c7d6ce]">{scenario.description}</p>
+                <p className="eyebrow">EXCEPTION//OS</p>
+                <h1 className="mt-2 max-w-3xl text-3xl font-semibold tracking-normal text-white">
+                  Restaurant Intelligence Command Center
+                </h1>
+                <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-300">
+                  Ask one operational question. The right agents recall history, explain the evidence,
+                  recommend a playbook, and save the result for the next shift.
+                </p>
               </div>
-              <div className="flex items-start gap-2">
-                <button
-                  className="hard-button flex items-center gap-2 px-3 py-2 text-[#ffce65]"
-                  onClick={() => (demoState === "running" ? stopDemo() : void startDemo())}
-                >
-                  {demoState === "running" ? <Pause size={15} /> : <Play size={15} />}
-                  {demoState === "running" ? "PAUSE DEMO" : "AUTO DEMO"}
-                </button>
-                <div className="border border-[#ffce65] px-3 py-2 text-right text-[#ffce65]">
-                  <div className="text-[10px]">NEON KITCHEN WAR ROOM</div>
-                  <div className="text-xl">{scenario.cartridgeNumber}</div>
+              <div className="grid min-w-[220px] grid-cols-2 gap-2">
+                <div className="stat-tile">
+                  <span>Memory</span>
+                  <strong>{response?.health.memoryProvider ?? "MOCK"}</strong>
+                </div>
+                <div className="stat-tile">
+                  <span>Engine</span>
+                  <strong>{response?.health.decisionEngine ?? "RULES"}</strong>
                 </div>
               </div>
             </div>
           </header>
 
-          <section className={`hard-panel p-3 ${demoState === "running" ? "border-[#ffce65]" : ""}`}>
-            <div className="flex items-center justify-between gap-3 text-[#ffce65]">
-              <span>GUIDED DEMO MODE</span>
-              <span>{demoState === "running" ? demoSteps[demoIndex].moment : demoState === "done" ? "COMPLETE" : "READY"} · [D]</span>
-            </div>
-            <p className="mt-2 text-base leading-6 text-[#f4f7ee]">{demoCaption}</p>
-            <div className="mt-2 grid grid-cols-5 gap-2">
-              {demoSteps.map((step, index) => (
-                <div
-                  key={`${step.scenarioId}-${step.moment}`}
-                  className={`h-2 border ${index <= demoIndex && demoState !== "idle" ? "border-[#79ffb8] bg-[#79ffb8]" : "border-[#33414a]"}`}
-                />
-              ))}
-            </div>
-          </section>
-
-          <div className="grid grid-cols-[1.05fr_1fr] gap-4 max-lg:grid-cols-1">
-            <section className="hard-panel p-3">
-              <div className="mb-2 flex items-center gap-2 text-[#ffce65]">
-                <ShieldAlert size={16} />
-                CURRENT INCIDENT
+          <div className="grid grid-cols-[0.95fr_1.05fr] gap-5 max-lg:grid-cols-1">
+            <section className="modern-panel p-5">
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2">
+                  <ShieldAlert size={18} className="text-violet-300" />
+                  <p className="section-label">Current incident</p>
+                </div>
+                <span className="rounded-full border border-rose-400/30 bg-rose-400/10 px-3 py-1 text-xs text-rose-100">
+                  Severity {scenario.currentException.severity}
+                </span>
               </div>
-              <h2 className="text-xl text-[#ff5d73]">{scenario.alertHeadline}</h2>
-              <p className="mt-2 leading-5 text-[#dce7df]">{scenario.currentException.situation}</p>
-              <div className="mt-3 flex flex-wrap gap-2">
+              <h2 className="mt-4 text-2xl font-semibold text-white">{scenario.alertHeadline}</h2>
+              <p className="mt-3 leading-6 text-slate-300">{scenario.currentException.situation}</p>
+              <div className="mt-4 flex flex-wrap gap-2">
                 {scenario.currentException.tags.map((tag) => (
-                  <span key={tag} className="border border-[#33414a] px-2 py-1 text-[10px] text-[#68d8ff]">{tag}</span>
+                  <span key={tag} className="rounded-full border border-violet-300/15 bg-violet-400/10 px-3 py-1 text-xs text-violet-100">
+                    {tag}
+                  </span>
                 ))}
               </div>
             </section>
 
-            <section className="hard-panel p-3">
-              <div className="mb-2 text-[#ffce65]">ASK CONSOLE</div>
+            <section className="modern-panel p-5">
+              <div className="mb-3 flex items-center gap-2">
+                <Sparkles size={18} className="text-cyan-300" />
+                <p className="section-label">Ask console</p>
+              </div>
               <textarea
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
-                className="h-24 w-full resize-none border border-[#33414a] bg-[#07090c] p-3 text-[#f4f7ee] outline-none focus:border-[#79ffb8]"
+                className="min-h-32 w-full resize-none rounded-lg border border-white/10 bg-slate-950/70 p-4 leading-6 text-slate-100 outline-none transition focus:border-violet-300/60 focus:ring-4 focus:ring-violet-500/10"
               />
-              <div className="mt-3 flex flex-wrap gap-2">
-                <button className="hard-button flex items-center gap-2 px-3 py-2" onClick={() => void ask()} disabled={askState === "loading"}>
-                  {askState === "loading" ? <Loader2 className="animate-spin" size={15} /> : <Send size={15} />}
-                  RECALL TRACE
+              <div className="mt-4 flex flex-wrap gap-3">
+                <button className="primary-button" onClick={() => void ask()} disabled={askState === "loading"}>
+                  {askState === "loading" ? <Loader2 className="animate-spin" size={16} /> : <Send size={16} />}
+                  Recall trace
                 </button>
-                <button className="hard-button flex items-center gap-2 px-3 py-2" onClick={resetScenario} disabled={resetState === "loading"}>
-                  <RotateCcw size={15} />
-                  RESET SCENARIO
+                <button className="secondary-button" onClick={resetScenario} disabled={resetState === "loading"}>
+                  <RotateCcw size={16} />
+                  Reset
                 </button>
               </div>
-              <div className="mt-3 min-h-5 text-[11px] text-[#9aa8a0]">
-                {askState === "loading" && "MATCHING INCIDENTS / CHECKING OUTCOMES / COMPILING PLAYBOOK"}
+              <div className="mt-3 min-h-5 text-xs text-slate-400">
+                {askState === "loading" && "Matching incidents, checking outcomes, compiling playbook..."}
                 {askState === "success" && response?.providerStatus}
                 {resetState === "success" && "Scenario reset complete."}
-                {error && <span className="text-[#ff5d73]">{error}</span>}
+                {error && <span className="text-rose-200">{error}</span>}
               </div>
             </section>
           </div>
 
-          <section className="hard-panel p-3">
-            <div className="mb-3 flex items-center justify-between gap-3">
-              <div className="text-[#ffce65]">RECOMMENDATION</div>
-              <div className="text-[#68d8ff]">
-                CONFIDENCE {displayDecision?.confidence ?? scenario.expectedRecommendation.confidence}%
+          <section className="modern-panel p-5">
+            <div className="flex items-start justify-between gap-5 max-md:flex-col">
+              <div>
+                <p className="section-label">Recommendation</p>
+                <h2 className="mt-3 text-3xl font-semibold text-white">
+                  {displayDecision?.headline ?? "Ready for recall"}
+                </h2>
+              </div>
+              <div className="confidence-ring">
+                <span>{confidence}%</span>
+                <small>confidence</small>
               </div>
             </div>
-            <h2 className="text-2xl text-[#79ffb8]">{displayDecision?.headline ?? "SYSTEM READY"}</h2>
-            <p className="mt-2 text-base leading-6 text-[#f4f7ee]">
-              {displayDecision?.recommendation ?? "Press RECALL TRACE to dispatch the right restaurant agents."}
+            <p className="mt-4 text-lg leading-7 text-slate-100">
+              {displayDecision?.recommendation ?? "Press Recall trace to dispatch agents and build the evidence-backed playbook."}
             </p>
-            <p className="mt-2 leading-6 text-[#b7c8c0]">{displayDecision?.rationale ?? scenario.expectedRecommendation.rationale}</p>
+            <p className="mt-3 max-w-4xl leading-6 text-slate-300">
+              {displayDecision?.rationale ?? scenario.expectedRecommendation.rationale}
+            </p>
             {displayDecision?.conflictNotes?.map((note) => (
-              <div key={note} className="mt-2 border border-[#ffce65] px-3 py-2 text-[#ffce65]">{note}</div>
+              <div key={note} className="mt-3 rounded-lg border border-amber-300/25 bg-amber-300/10 px-4 py-3 text-amber-100">
+                {note}
+              </div>
             ))}
-            <div className="mt-4 grid grid-cols-2 gap-3 max-md:grid-cols-1">
+
+            <div className="mt-5 grid grid-cols-2 gap-5 max-lg:grid-cols-1">
               <div>
-                <div className="mb-2 text-[11px] text-[#68d8ff]">STRONGEST MEMORIES</div>
-                <div className="space-y-2">
+                <p className="section-label mb-3">Strongest memories</p>
+                <div className="space-y-3">
                   {strongestMemories.map((memory) => (
-                    <div key={memory.id} className="border border-[#33414a] p-2">
-                      <div className="flex items-center justify-between gap-2 text-[#ffce65]">
-                        <span>{memory.title}</span>
-                        <span className="text-[10px] text-[#79ffb8]">{memory.memoryType}</span>
+                    <article key={memory.id} className="memory-card">
+                      <div className="flex items-center justify-between gap-3">
+                        <h3 className="font-medium text-white">{memory.title}</h3>
+                        <span className="rounded-full bg-cyan-300/10 px-2.5 py-1 text-[11px] text-cyan-100">
+                          {memory.memoryType}
+                        </span>
                       </div>
-                      <p className="mt-1 line-clamp-2 text-[#c7d6ce]">{memory.content}</p>
-                    </div>
+                      <p className="mt-2 line-clamp-3 leading-6 text-slate-300">{memory.content}</p>
+                    </article>
                   ))}
                 </div>
               </div>
+
               <div>
-                <div className="mb-2 text-[11px] text-[#68d8ff]">ACTION PLAYBOOK</div>
+                <p className="section-label mb-3">Action playbook</p>
                 <ol className="space-y-2">
                   {(displayDecision?.playbookSteps ?? scenario.expectedRecommendation.playbookSteps).map((step, index) => (
-                    <li key={step} className="flex gap-2 border border-[#33414a] px-3 py-1.5">
-                      <span className="text-[#ffce65]">{String(index + 1).padStart(2, "0")}</span>
-                      <span>{step}</span>
+                    <li key={step} className="playbook-row">
+                      <span>{String(index + 1).padStart(2, "0")}</span>
+                      <p>{step}</p>
                     </li>
                   ))}
                 </ol>
@@ -496,89 +424,101 @@ export function WarRoom() {
           </section>
         </section>
 
-        <aside className="space-y-4 max-xl:col-span-2 max-lg:col-span-1">
-          <section className="hard-panel p-3">
-            <div className="mb-2 text-[#ffce65]">AGENT DISPATCH TRACE</div>
-            {(response?.routing.dispatchReasons ?? [{ agentId: "ORCHESTRATOR", reason: "Awaiting recall request." }]).map((item) => (
-              <div key={item.agentId} className="mb-2 border border-[#33414a] px-3 py-2">
-                <div className="text-[#79ffb8]">{item.agentId}</div>
-                <div className="text-[11px] leading-5 text-[#c7d6ce]">{item.reason}</div>
-              </div>
-            ))}
-              <div className="mt-3 grid grid-cols-2 gap-2 text-[11px]">
-                <div className="border border-[#33414a] p-2">MEMORY {response?.health.memoryProvider ?? "MOCK READY"}</div>
-                <div className="border border-[#33414a] p-2">ENGINE {response?.health.decisionEngine ?? "DETERMINISTIC"}</div>
-              </div>
-              {response?.health.decisionStatus && (
-                <div className={`mt-2 border px-3 py-2 text-[11px] ${response.health.decisionStatus.ok ? "border-[#79ffb8] text-[#79ffb8]" : "border-[#ffce65] text-[#ffce65]"}`}>
-                  {response.health.decisionStatus.message}
-                </div>
-              )}
-          </section>
-
-          <section className="hard-panel p-3">
-            <div className="mb-2 text-[#ffce65]">CONFIDENCE SIGNALS</div>
-            {(displayDecision?.confidenceSignals ?? scenario.confidenceSignals).map((signal) => (
-              <div key={signal.label} className="mb-2 flex items-center justify-between border border-[#33414a] px-3 py-2">
-                <span>{signal.label}</span>
-                <span className={signal.points >= 0 ? "text-[#79ffb8]" : "text-[#ff5d73]"}>
-                  {signal.points > 0 ? "+" : ""}{signal.points}
+        <aside className="space-y-5 max-xl:col-span-2 max-lg:col-span-1">
+          <section className="modern-panel p-5">
+            <div className="mb-4 flex items-center gap-2">
+              <Radar size={18} className="text-violet-300" />
+              <p className="section-label">Agent dispatch</p>
+            </div>
+            <div className="mb-4 flex flex-wrap gap-2">
+              {activeAgents.map((agent) => (
+                <span key={agent} className="agent-pill">
+                  {agent}
                 </span>
+              ))}
+            </div>
+            <div className="space-y-3">
+              {(response?.routing.dispatchReasons ?? [{ agentId: "ORCHESTRATOR", reason: "Awaiting recall request." }]).map((item) => (
+                <div key={item.agentId} className="rounded-lg border border-white/10 bg-white/[0.035] p-3">
+                  <p className="font-medium text-white">{item.agentId}</p>
+                  <p className="mt-1 text-xs leading-5 text-slate-400">{item.reason}</p>
+                </div>
+              ))}
+            </div>
+            {response?.health.decisionStatus && (
+              <div className={`mt-3 rounded-lg border px-3 py-2 text-xs ${statusTone(response.health.decisionStatus.ok)}`}>
+                {response.health.decisionStatus.message}
               </div>
-            ))}
+            )}
           </section>
 
-          <section className="hard-panel p-3">
-            <div className="mb-2 text-[#ffce65]">MANAGER ACTION</div>
-            <div className="flex flex-wrap gap-2">
-              <button className="hard-button flex items-center gap-2 px-3 py-2" onClick={() => saveOutcome("ACCEPTED")} disabled={!response || outcomeState === "saving"}>
-                <Check size={15} />
-                ACCEPT
+          <section className="modern-panel p-5">
+            <p className="section-label mb-3">Confidence signals</p>
+            <div className="space-y-2">
+              {(displayDecision?.confidenceSignals ?? scenario.confidenceSignals).map((signal) => (
+                <div key={signal.label} className="flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-white/[0.035] px-3 py-2">
+                  <span className="text-slate-300">{signal.label}</span>
+                  <span className={signal.points >= 0 ? "text-emerald-200" : "text-rose-200"}>
+                    {signal.points > 0 ? "+" : ""}
+                    {signal.points}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          <section className="modern-panel p-5">
+            <p className="section-label mb-3">Manager action</p>
+            <div className="grid grid-cols-2 gap-2">
+              <button className="primary-button justify-center" onClick={() => saveOutcome("ACCEPTED")} disabled={!response || outcomeState === "saving"}>
+                <Check size={16} />
+                Accept
               </button>
-              <button className="hard-button flex items-center gap-2 px-3 py-2 text-[#ffce65]" onClick={() => saveOutcome("OVERRIDDEN")} disabled={outcomeState === "saving"}>
-                <X size={15} />
-                OVERRIDE
+              <button className="secondary-button justify-center" onClick={() => saveOutcome("OVERRIDDEN")} disabled={outcomeState === "saving"}>
+                <X size={16} />
+                Override
               </button>
-              <button className="hard-button flex items-center gap-2 px-3 py-2" onClick={() => saveOutcome("LOGGED")} disabled={outcomeState === "saving"}>
-                <Save size={15} />
-                LOG OUTCOME
+              <button className="secondary-button col-span-2 justify-center" onClick={() => saveOutcome("LOGGED")} disabled={outcomeState === "saving"}>
+                <Save size={16} />
+                Log outcome
               </button>
             </div>
             <textarea
               value={outcome}
               onChange={(event) => setOutcome(event.target.value)}
-              className="mt-3 h-20 w-full resize-none border border-[#33414a] bg-[#07090c] p-3 text-[#f4f7ee] outline-none focus:border-[#79ffb8]"
+              className="mt-3 min-h-24 w-full resize-none rounded-lg border border-white/10 bg-slate-950/70 p-3 leading-5 text-slate-100 outline-none transition focus:border-violet-300/60 focus:ring-4 focus:ring-violet-500/10"
             />
-            <div className="min-h-6 text-[11px] text-[#79ffb8]">
-              {outcomeState === "saving" && "MEMORY PROCESSING"}
+            <div className="min-h-6 text-xs text-emerald-200">
+              {outcomeState === "saving" && "Saving memory..."}
               {memoryEvent && memoryEvent.message}
             </div>
           </section>
 
-          <section className="hard-panel p-3">
-            <div className="mb-2 flex items-center gap-2 text-[#ffce65]">
-              <AlertTriangle size={15} />
-              LIVE INTEGRATIONS
+          <section className="modern-panel p-5">
+            <div className="mb-3 flex items-center gap-2">
+              <Database size={18} className="text-cyan-300" />
+              <p className="section-label">Live integrations</p>
             </div>
             <div className="flex flex-wrap gap-2">
-              <button className="hard-button px-3 py-2" onClick={checkHealth} disabled={healthState === "loading"}>
-                VERIFY LIVE APIS
+              <button className="secondary-button" onClick={checkHealth} disabled={healthState === "loading"}>
+                Verify APIs
               </button>
-              <button className="hard-button px-3 py-2" onClick={seedXTrace} disabled={seedState === "loading"}>
-                SYNC XTRACE
+              <button className="secondary-button" onClick={seedXTrace} disabled={seedState === "loading"}>
+                Sync XTrace
               </button>
             </div>
-            <div className="mt-3 space-y-2 text-[11px]">
-              <div className="border border-[#33414a] p-2">
-                XTRACE: {health?.xtrace.message ?? "Not checked"}
+            <div className="mt-3 space-y-2 text-xs">
+              <div className={`rounded-lg border p-3 ${statusTone(health?.xtrace.ok)}`}>
+                XTrace: {health?.xtrace.message ?? "Not checked"}
               </div>
-              <div className="border border-[#33414a] p-2">
-                OPENAI: {health?.openai.message ?? "Not checked"}
+              <div className={`rounded-lg border p-3 ${statusTone(health?.openai.ok)}`}>
+                OpenAI: {health?.openai.message ?? "Not checked"}
               </div>
             </div>
-            <p className="mt-3 leading-5 text-[#b7c8c0]">
-              Simulated actions require manager approval. Allergy guidance supports staff decisions and does not guarantee food safety.
-            </p>
+            <div className="mt-3 flex gap-2 rounded-lg border border-amber-300/20 bg-amber-300/10 p-3 text-xs leading-5 text-amber-100">
+              <AlertTriangle size={16} className="mt-0.5 shrink-0" />
+              <p>Simulated actions require manager approval. Allergy guidance supports staff decisions and does not guarantee food safety.</p>
+            </div>
           </section>
         </aside>
       </div>
