@@ -3,7 +3,6 @@
 import {
   AlertTriangle,
   Check,
-  Database,
   Loader2,
   Radar,
   RotateCcw,
@@ -39,12 +38,6 @@ type AskResponse = {
   };
 };
 
-type HealthResponse = {
-  xtrace: IntegrationStatus;
-  openai: IntegrationStatus;
-  ok: boolean;
-};
-
 const outcomePresets: Record<string, string> = {
   "supplier-loop": "Supplier substitute rejected. Smoked tofu bowl activated. No texture complaints reported.",
   "fryer-ghost": "Fried items paused. Thermometer confirmed unstable temperature. Maintenance contacted.",
@@ -57,12 +50,6 @@ const outcomePresets: Record<string, string> = {
 function isTypingTarget(target: EventTarget | null) {
   if (!(target instanceof HTMLElement)) return false;
   return ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName) || target.isContentEditable;
-}
-
-function statusTone(ok?: boolean) {
-  if (ok === true) return "border-emerald-400/35 bg-emerald-400/10 text-emerald-200";
-  if (ok === false) return "border-amber-400/35 bg-amber-400/10 text-amber-100";
-  return "border-white/10 bg-white/[0.04] text-slate-300";
 }
 
 export function WarRoom() {
@@ -82,9 +69,6 @@ export function WarRoom() {
   const [outcome, setOutcome] = useState(outcomePresets[scenarioId]);
   const [error, setError] = useState("");
   const [memoryEvent, setMemoryEvent] = useState<MemoryIngestResult | null>(null);
-  const [health, setHealth] = useState<HealthResponse | null>(null);
-  const [healthState, setHealthState] = useState<"idle" | "loading" | "success" | "error">("idle");
-  const [seedState, setSeedState] = useState<"idle" | "loading" | "success" | "error">("idle");
 
   const setActiveScenario = useCallback(
     (nextScenarioId: string) => {
@@ -94,7 +78,6 @@ export function WarRoom() {
       setResponse(null);
       setMemoryEvent(null);
       setError("");
-      setHealth(null);
       setOutcome(outcomePresets[next.id]);
       setAskState("idle");
       setOutcomeState("idle");
@@ -186,40 +169,6 @@ export function WarRoom() {
     }
   }, [scenarioId]);
 
-  const checkHealth = useCallback(async () => {
-    setHealthState("loading");
-    setError("");
-    try {
-      const result = await fetch("/api/health");
-      const json = await result.json();
-      if (!result.ok) throw new Error(json.message ?? "Health check failed");
-      setHealth(json);
-      setHealthState("success");
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Health check failed");
-      setHealthState("error");
-    }
-  }, []);
-
-  const seedXTrace = useCallback(async () => {
-    setSeedState("loading");
-    setError("");
-    try {
-      const result = await fetch("/api/seed", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ all: true }),
-      });
-      const json = await result.json();
-      if (!result.ok) throw new Error(json.message ?? "XTrace sync failed");
-      setSeedState("success");
-      await checkHealth();
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "XTrace sync failed");
-      setSeedState("error");
-    }
-  }, [checkHealth]);
-
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
       if (isTypingTarget(event.target)) return;
@@ -237,10 +186,10 @@ export function WarRoom() {
 
   const displayDecision = response?.decision;
   const strongestMemories = useMemo(
-    () => (displayDecision?.evidence ?? scenario.historicalMemories).slice(0, 2),
-    [displayDecision, scenario.historicalMemories],
+    () => (displayDecision?.evidence ?? []).slice(0, 2),
+    [displayDecision],
   );
-  const confidence = displayDecision?.confidence ?? scenario.expectedRecommendation.confidence;
+  const confidence = displayDecision?.confidence;
   const activeAgents = response
     ? [response.decision.primaryAgent, ...response.decision.supportingAgents]
     : ["ORCHESTRATOR"];
@@ -304,12 +253,12 @@ export function WarRoom() {
               </div>
               <div className="grid min-w-[220px] grid-cols-2 gap-2">
                 <div className="stat-tile">
-                  <span>Memory</span>
-                  <strong>{response?.health.memoryProvider ?? "MOCK"}</strong>
+                  <span>Scenarios</span>
+                  <strong>{demoScenarios.length}</strong>
                 </div>
                 <div className="stat-tile">
-                  <span>Engine</span>
-                  <strong>{response?.health.decisionEngine ?? "RULES"}</strong>
+                  <span>Agents</span>
+                  <strong>{activeAgents.length}</strong>
                 </div>
               </div>
             </div>
@@ -371,56 +320,64 @@ export function WarRoom() {
               <div>
                 <p className="section-label">Recommendation</p>
                 <h2 className="mt-3 text-3xl font-semibold text-white">
-                  {displayDecision?.headline ?? "Ready for recall"}
+                  {displayDecision?.headline ?? "Waiting for recall"}
                 </h2>
               </div>
-              <div className="confidence-ring">
-                <span>{confidence}%</span>
-                <small>confidence</small>
-              </div>
+              {confidence !== undefined && (
+                <div className="confidence-ring">
+                  <span>{confidence}%</span>
+                  <small>confidence</small>
+                </div>
+              )}
             </div>
             <p className="mt-4 text-lg leading-7 text-slate-100">
               {displayDecision?.recommendation ?? "Press Recall trace to dispatch agents and build the evidence-backed playbook."}
             </p>
-            <p className="mt-3 max-w-4xl leading-6 text-slate-300">
-              {displayDecision?.rationale ?? scenario.expectedRecommendation.rationale}
-            </p>
+            {displayDecision && (
+              <p className="mt-3 max-w-4xl leading-6 text-slate-300">{displayDecision.rationale}</p>
+            )}
             {displayDecision?.conflictNotes?.map((note) => (
               <div key={note} className="mt-3 rounded-lg border border-amber-300/25 bg-amber-300/10 px-4 py-3 text-amber-100">
                 {note}
               </div>
             ))}
 
-            <div className="mt-5 grid grid-cols-2 gap-5 max-lg:grid-cols-1">
-              <div>
-                <p className="section-label mb-3">Strongest memories</p>
-                <div className="space-y-3">
-                  {strongestMemories.map((memory) => (
-                    <article key={memory.id} className="memory-card">
-                      <div className="flex items-center justify-between gap-3">
-                        <h3 className="font-medium text-white">{memory.title}</h3>
-                        <span className="rounded-full bg-cyan-300/10 px-2.5 py-1 text-[11px] text-cyan-100">
-                          {memory.memoryType}
-                        </span>
-                      </div>
-                      <p className="mt-2 line-clamp-3 leading-6 text-slate-300">{memory.content}</p>
-                    </article>
-                  ))}
+            {displayDecision ? (
+              <div className="mt-5 grid grid-cols-2 gap-5 max-lg:grid-cols-1">
+                <div>
+                  <p className="section-label mb-3">Strongest memories</p>
+                  <div className="space-y-3">
+                    {strongestMemories.map((memory) => (
+                      <article key={memory.id} className="memory-card">
+                        <div className="flex items-center justify-between gap-3">
+                          <h3 className="font-medium text-white">{memory.title}</h3>
+                          <span className="rounded-full bg-cyan-300/10 px-2.5 py-1 text-[11px] text-cyan-100">
+                            {memory.memoryType}
+                          </span>
+                        </div>
+                        <p className="mt-2 line-clamp-3 leading-6 text-slate-300">{memory.content}</p>
+                      </article>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <p className="section-label mb-3">Action playbook</p>
+                  <ol className="space-y-2">
+                    {displayDecision.playbookSteps.map((step, index) => (
+                      <li key={step} className="playbook-row">
+                        <span>{String(index + 1).padStart(2, "0")}</span>
+                        <p>{step}</p>
+                      </li>
+                    ))}
+                  </ol>
                 </div>
               </div>
-
-              <div>
-                <p className="section-label mb-3">Action playbook</p>
-                <ol className="space-y-2">
-                  {(displayDecision?.playbookSteps ?? scenario.expectedRecommendation.playbookSteps).map((step, index) => (
-                    <li key={step} className="playbook-row">
-                      <span>{String(index + 1).padStart(2, "0")}</span>
-                      <p>{step}</p>
-                    </li>
-                  ))}
-                </ol>
+            ) : (
+              <div className="mt-5 rounded-lg border border-dashed border-violet-300/25 bg-violet-300/5 p-5 text-sm leading-6 text-slate-300">
+                Evidence, memory matches, confidence, and playbook steps appear here only after recall.
               </div>
-            </div>
+            )}
           </section>
         </section>
 
@@ -445,25 +402,26 @@ export function WarRoom() {
                 </div>
               ))}
             </div>
-            {response?.health.decisionStatus && (
-              <div className={`mt-3 rounded-lg border px-3 py-2 text-xs ${statusTone(response.health.decisionStatus.ok)}`}>
-                {response.health.decisionStatus.message}
-              </div>
-            )}
           </section>
 
           <section className="modern-panel p-5">
             <p className="section-label mb-3">Confidence signals</p>
             <div className="space-y-2">
-              {(displayDecision?.confidenceSignals ?? scenario.confidenceSignals).map((signal) => (
-                <div key={signal.label} className="flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-white/[0.035] px-3 py-2">
-                  <span className="text-slate-300">{signal.label}</span>
-                  <span className={signal.points >= 0 ? "text-emerald-200" : "text-rose-200"}>
-                    {signal.points > 0 ? "+" : ""}
-                    {signal.points}
-                  </span>
+              {displayDecision ? (
+                displayDecision.confidenceSignals.map((signal) => (
+                  <div key={signal.label} className="flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-white/[0.035] px-3 py-2">
+                    <span className="text-slate-300">{signal.label}</span>
+                    <span className={signal.points >= 0 ? "text-emerald-200" : "text-rose-200"}>
+                      {signal.points > 0 ? "+" : ""}
+                      {signal.points}
+                    </span>
+                  </div>
+                ))
+              ) : (
+                <div className="rounded-lg border border-dashed border-white/10 bg-white/[0.025] p-3 text-xs leading-5 text-slate-400">
+                  Confidence signals unlock after recall.
                 </div>
-              ))}
+              )}
             </div>
           </section>
 
@@ -495,27 +453,7 @@ export function WarRoom() {
           </section>
 
           <section className="modern-panel p-5">
-            <div className="mb-3 flex items-center gap-2">
-              <Database size={18} className="text-cyan-300" />
-              <p className="section-label">Live integrations</p>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <button className="secondary-button" onClick={checkHealth} disabled={healthState === "loading"}>
-                Verify APIs
-              </button>
-              <button className="secondary-button" onClick={seedXTrace} disabled={seedState === "loading"}>
-                Sync XTrace
-              </button>
-            </div>
-            <div className="mt-3 space-y-2 text-xs">
-              <div className={`rounded-lg border p-3 ${statusTone(health?.xtrace.ok)}`}>
-                XTrace: {health?.xtrace.message ?? "Not checked"}
-              </div>
-              <div className={`rounded-lg border p-3 ${statusTone(health?.openai.ok)}`}>
-                OpenAI: {health?.openai.message ?? "Not checked"}
-              </div>
-            </div>
-            <div className="mt-3 flex gap-2 rounded-lg border border-amber-300/20 bg-amber-300/10 p-3 text-xs leading-5 text-amber-100">
+            <div className="flex gap-2 rounded-lg border border-amber-300/20 bg-amber-300/10 p-3 text-xs leading-5 text-amber-100">
               <AlertTriangle size={16} className="mt-0.5 shrink-0" />
               <p>Simulated actions require manager approval. Allergy guidance supports staff decisions and does not guarantee food safety.</p>
             </div>
