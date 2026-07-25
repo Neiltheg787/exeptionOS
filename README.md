@@ -14,11 +14,22 @@ Open `http://localhost:3000`.
 
 ## Environment
 
-`DEMO_MODE=mock` forces the fully deterministic demo. `DEMO_MODE=auto` uses XTrace only when `XTRACE_API_KEY`, `XTRACE_ORG_ID`, and `XTRACE_GROUP_ID` are present, then falls back to mock memory on timeout or error.
+`DEMO_MODE=mock` forces the fully deterministic demo. `DEMO_MODE=auto` uses XTrace when `XTRACE_API_KEY` is present, then falls back to mock memory on timeout or error. `DEMO_MODE=xtrace` surfaces XTrace errors instead of falling back.
 
 The installed `@xtraceai/memory` SDK version is `0.6.0`; its current `MemoryClient` constructor uses `apiKey` only. `XTRACE_ORG_ID` remains in `.env.example` because the hackathon contract asks for it, but it is not passed into the SDK.
 
-OpenAI is optional. Set both `OPENAI_API_KEY` and `OPENAI_MODEL` to let the server refine rationale wording. Without both, the deterministic decision engine runs the full demo.
+`XTRACE_GROUP_ID` may be either a real XTrace `grp_...` id or a friendly group name. If it is omitted, the app creates or finds a group named `restaurant:palo-alto-01`.
+
+OpenAI is optional. Set both `OPENAI_API_KEY` and `OPENAI_MODEL` to let the server call the Responses API with structured output for recommendation wording, rationale, and playbook refinement. Without both, the deterministic decision engine runs the full demo.
+
+## Live integration setup
+
+1. Put live values in `.env.local`.
+2. Start the app with `npm run dev`.
+3. In the War Room, press `VERIFY LIVE APIS`.
+4. Press `SYNC XTRACE` once to seed all scenario memories into the configured XTrace group.
+
+The sync endpoint is idempotent by seed marker and avoids re-ingesting memories already found in XTrace.
 
 ## Demo flow
 

@@ -220,6 +220,15 @@ export interface MemoryProvider {
   resetDemoState?(input: ResetMemoryInput): Promise<void>;
 }
 
+export type IntegrationStatus = {
+  provider: "XTRACE" | "MOCK" | "OPENAI" | "DETERMINISTIC";
+  configured: boolean;
+  ok: boolean;
+  mode?: string;
+  model?: string;
+  message: string;
+};
+
 export interface SpecialistAgent {
   id: AgentId;
   displayName: string;

@@ -8,6 +8,7 @@ import {
   resetMockScenario,
 } from "@/lib/memory/mock-store";
 import type {
+  IntegrationStatus,
   MemoryIngestInput,
   MemoryIngestResult,
   MemoryProvider,
@@ -21,6 +22,7 @@ import type {
 
 const branchId = "palo-alto-01";
 const appId = "exception-os";
+const groupName = `restaurant:${branchId}`;
 
 function withTimeout<T>(promise: Promise<T>, ms = 4500): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -112,14 +114,44 @@ class MockMemoryProvider implements MemoryProvider {
 
 class XTraceMemoryProvider implements MemoryProvider {
   private client: MemoryClient;
-  private groupId: string;
+  private configuredGroup: string;
+  private resolvedGroupId?: string;
 
-  constructor(apiKey: string, groupId: string) {
+  constructor(apiKey: string, groupIdOrName: string) {
     this.client = new MemoryClient({ apiKey });
-    this.groupId = groupId;
+    this.configuredGroup = groupIdOrName;
+  }
+
+  private async getGroupId(): Promise<string> {
+    if (this.resolvedGroupId) return this.resolvedGroupId;
+    if (this.configuredGroup.startsWith("grp_")) {
+      this.resolvedGroupId = this.configuredGroup;
+      return this.resolvedGroupId;
+    }
+
+    const groups = await withTimeout(this.client.groups.list(), 4500);
+    const existing = groups.find(
+      (group) => group.status === "active" && group.name === this.configuredGroup,
+    );
+    if (existing) {
+      this.resolvedGroupId = existing.id;
+      return existing.id;
+    }
+
+    const created = await withTimeout(
+      this.client.groups.create({
+        name: this.configuredGroup,
+        prompt:
+          "Shared operational memories for EXCEPTION//OS restaurant exception demos, including supplier, equipment, rush, allergy, guest recovery, and waste procedures.",
+      }),
+      4500,
+    );
+    this.resolvedGroupId = created.id;
+    return created.id;
   }
 
   async recall(input: MemoryRecallInput): Promise<MemoryRecallResult> {
+    const groupId = await this.getGroupId();
     const queries = input.memoryQueries.length ? input.memoryQueries : [input.query];
     const results = await Promise.all(
       queries.slice(0, 5).map((query) =>
@@ -127,7 +159,7 @@ class XTraceMemoryProvider implements MemoryProvider {
           this.client.memories.search({
             query,
             user_id: input.branchId,
-            group_ids: [this.groupId],
+            group_ids: [groupId],
             app_id: appId,
             mode: "retrieve",
             limit: 5,
@@ -159,6 +191,7 @@ class XTraceMemoryProvider implements MemoryProvider {
   }
 
   async ingest(input: MemoryIngestInput): Promise<MemoryIngestResult> {
+    const groupId = await this.getGroupId();
     const localMemory = addMockOutcome(input);
     await withTimeout(
       this.client.memories.ingest({
@@ -166,7 +199,7 @@ class XTraceMemoryProvider implements MemoryProvider {
         conv_id: `${input.scenarioId}-${Date.now()}`,
         app_id: appId,
         agent_id: input.agentIds[0] ?? "ORCHESTRATOR",
-        group_ids: [this.groupId],
+        group_ids: [groupId],
         messages: [
           {
             role: "user",
@@ -191,6 +224,81 @@ class XTraceMemoryProvider implements MemoryProvider {
 
   async getRecentMemories(input: RecentMemoryInput): Promise<RestaurantMemory[]> {
     return getMockMemories(input.scenarioId ?? getScenario().id);
+  }
+
+  async health(): Promise<IntegrationStatus> {
+    const groupId = await this.getGroupId();
+    return {
+      provider: "XTRACE",
+      configured: true,
+      ok: true,
+      mode: process.env.DEMO_MODE ?? "auto",
+      message: `Connected to XTrace group ${groupId}.`,
+    };
+  }
+
+  async seedScenario(scenarioId: string): Promise<{ created: number; skipped: number; groupId: string }> {
+    const scenario = getScenario(scenarioId);
+    const groupId = await this.getGroupId();
+    let created = 0;
+    let skipped = 0;
+
+    for (const memory of scenario.historicalMemories) {
+      const marker = `exception-os-seed:${memory.id}`;
+      const existing = await withTimeout(
+        this.client.memories.search({
+          query: marker,
+          user_id: branchId,
+          group_ids: [groupId],
+          app_id: appId,
+          mode: "retrieve",
+          limit: 1,
+        }),
+        4500,
+      );
+      if (existing.data.some((item) => item.text.includes(marker))) {
+        skipped += 1;
+        continue;
+      }
+
+      await withTimeout(
+        this.client.memories.ingest(
+          {
+            user_id: branchId,
+            conv_id: `seed-${scenario.id}-${memory.id}`,
+            app_id: appId,
+            agent_id: memory.agentIds?.[0] ?? "ORCHESTRATOR",
+            group_ids: [groupId],
+            messages: [
+              {
+                role: "system",
+                content:
+                  "Store this restaurant operations memory for future EXCEPTION//OS recall. Keep the seed marker for idempotency.",
+              },
+              {
+                role: "user",
+                content: [
+                  marker,
+                  `Scenario: ${scenario.id}`,
+                  `Memory type: ${memory.memoryType}`,
+                  `Title: ${memory.title}`,
+                  `Content: ${memory.content}`,
+                  `Outcome: ${memory.outcome ?? "MONITORING"}`,
+                  `Status: ${memory.status ?? "ACTIVE"}`,
+                  `Tags: ${memory.tags.join(", ")}`,
+                  `Entities: ${memory.entities.join(", ")}`,
+                ].join("\n"),
+              },
+            ],
+          },
+          { wait: true },
+        ),
+        30000,
+      );
+      created += 1;
+    }
+
+    return { created, skipped, groupId };
   }
 }
 
@@ -261,8 +369,8 @@ class CachedMemoryProvider implements MemoryProvider {
 export function getMemoryProvider(): MemoryProvider {
   const mode = process.env.DEMO_MODE ?? "auto";
   const mock = new MockMemoryProvider();
-  const hasXTrace = Boolean(process.env.XTRACE_API_KEY && process.env.XTRACE_ORG_ID);
-  const groupId = process.env.XTRACE_GROUP_ID || `restaurant:${branchId}`;
+  const hasXTrace = Boolean(process.env.XTRACE_API_KEY);
+  const groupId = process.env.XTRACE_GROUP_ID || groupName;
 
   if (mode === "mock" || !hasXTrace) {
     return mock;
@@ -270,4 +378,43 @@ export function getMemoryProvider(): MemoryProvider {
 
   const xtrace = new XTraceMemoryProvider(process.env.XTRACE_API_KEY!, groupId);
   return new CachedMemoryProvider(xtrace, mock, mode === "xtrace");
+}
+
+export function getXTraceProviderForAdmin(): XTraceMemoryProvider | null {
+  if (!process.env.XTRACE_API_KEY) return null;
+  return new XTraceMemoryProvider(process.env.XTRACE_API_KEY, process.env.XTRACE_GROUP_ID || groupName);
+}
+
+export async function getXTraceHealth(): Promise<IntegrationStatus> {
+  const mode = process.env.DEMO_MODE ?? "auto";
+  if (mode === "mock") {
+    return {
+      provider: "MOCK",
+      configured: false,
+      ok: true,
+      mode,
+      message: "DEMO_MODE=mock is forcing local mock memory.",
+    };
+  }
+  const provider = getXTraceProviderForAdmin();
+  if (!provider) {
+    return {
+      provider: "XTRACE",
+      configured: false,
+      ok: false,
+      mode,
+      message: "Set XTRACE_API_KEY to enable live XTrace memory.",
+    };
+  }
+  try {
+    return await provider.health();
+  } catch (error) {
+    return {
+      provider: "XTRACE",
+      configured: true,
+      ok: false,
+      mode,
+      message: error instanceof Error ? error.message : "XTrace health check failed.",
+    };
+  }
 }

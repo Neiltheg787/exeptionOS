@@ -4,7 +4,14 @@ import { AlertTriangle, Check, Loader2, RotateCcw, Save, Send, ShieldAlert, X } 
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { defaultScenarioId, demoScenarios, getScenario } from "@/data/scenarios";
-import type { AggregatedDecision, AgentId, DemoScenario, MemoryIngestResult, RoutingDecision } from "@/lib/types";
+import type {
+  AggregatedDecision,
+  AgentId,
+  DemoScenario,
+  IntegrationStatus,
+  MemoryIngestResult,
+  RoutingDecision,
+} from "@/lib/types";
 
 type AskResponse = {
   query: string;
@@ -16,7 +23,14 @@ type AskResponse = {
   health: {
     memoryProvider: string;
     decisionEngine: string;
+    decisionStatus: IntegrationStatus;
   };
+};
+
+type HealthResponse = {
+  xtrace: IntegrationStatus;
+  openai: IntegrationStatus;
+  ok: boolean;
 };
 
 const outcomePresets: Record<string, string> = {
@@ -50,6 +64,9 @@ export function WarRoom() {
   const [outcome, setOutcome] = useState(outcomePresets[scenarioId]);
   const [error, setError] = useState("");
   const [memoryEvent, setMemoryEvent] = useState<MemoryIngestResult | null>(null);
+  const [health, setHealth] = useState<HealthResponse | null>(null);
+  const [healthState, setHealthState] = useState<"idle" | "loading" | "success" | "error">("idle");
+  const [seedState, setSeedState] = useState<"idle" | "loading" | "success" | "error">("idle");
 
   const setActiveScenario = useCallback(
     (nextScenarioId: string) => {
@@ -59,6 +76,7 @@ export function WarRoom() {
       setResponse(null);
       setMemoryEvent(null);
       setError("");
+      setHealth(null);
       setOutcome(outcomePresets[next.id]);
       setAskState("idle");
       setOutcomeState("idle");
@@ -149,6 +167,40 @@ export function WarRoom() {
       setResetState("error");
     }
   }, [scenarioId]);
+
+  const checkHealth = useCallback(async () => {
+    setHealthState("loading");
+    setError("");
+    try {
+      const result = await fetch("/api/health");
+      const json = await result.json();
+      if (!result.ok) throw new Error(json.message ?? "Health check failed");
+      setHealth(json);
+      setHealthState("success");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Health check failed");
+      setHealthState("error");
+    }
+  }, []);
+
+  const seedXTrace = useCallback(async () => {
+    setSeedState("loading");
+    setError("");
+    try {
+      const result = await fetch("/api/seed", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ all: true }),
+      });
+      const json = await result.json();
+      if (!result.ok) throw new Error(json.message ?? "XTrace sync failed");
+      setSeedState("success");
+      await checkHealth();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "XTrace sync failed");
+      setSeedState("error");
+    }
+  }, [checkHealth]);
 
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
@@ -306,10 +358,15 @@ export function WarRoom() {
                 <div className="text-[11px] leading-5 text-[#c7d6ce]">{item.reason}</div>
               </div>
             ))}
-            <div className="mt-3 grid grid-cols-2 gap-2 text-[11px]">
-              <div className="border border-[#33414a] p-2">MEMORY {response?.health.memoryProvider ?? "MOCK READY"}</div>
-              <div className="border border-[#33414a] p-2">ENGINE {response?.health.decisionEngine ?? "DETERMINISTIC"}</div>
-            </div>
+              <div className="mt-3 grid grid-cols-2 gap-2 text-[11px]">
+                <div className="border border-[#33414a] p-2">MEMORY {response?.health.memoryProvider ?? "MOCK READY"}</div>
+                <div className="border border-[#33414a] p-2">ENGINE {response?.health.decisionEngine ?? "DETERMINISTIC"}</div>
+              </div>
+              {response?.health.decisionStatus && (
+                <div className={`mt-2 border px-3 py-2 text-[11px] ${response.health.decisionStatus.ok ? "border-[#79ffb8] text-[#79ffb8]" : "border-[#ffce65] text-[#ffce65]"}`}>
+                  {response.health.decisionStatus.message}
+                </div>
+              )}
           </section>
 
           <section className="hard-panel p-3">
@@ -354,9 +411,25 @@ export function WarRoom() {
           <section className="hard-panel p-3">
             <div className="mb-2 flex items-center gap-2 text-[#ffce65]">
               <AlertTriangle size={15} />
-              SAFETY / DEMO LIMITS
+              LIVE INTEGRATIONS
             </div>
-            <p className="leading-5 text-[#b7c8c0]">
+            <div className="flex flex-wrap gap-2">
+              <button className="hard-button px-3 py-2" onClick={checkHealth} disabled={healthState === "loading"}>
+                VERIFY LIVE APIS
+              </button>
+              <button className="hard-button px-3 py-2" onClick={seedXTrace} disabled={seedState === "loading"}>
+                SYNC XTRACE
+              </button>
+            </div>
+            <div className="mt-3 space-y-2 text-[11px]">
+              <div className="border border-[#33414a] p-2">
+                XTRACE: {health?.xtrace.message ?? "Not checked"}
+              </div>
+              <div className="border border-[#33414a] p-2">
+                OPENAI: {health?.openai.message ?? "Not checked"}
+              </div>
+            </div>
+            <p className="mt-3 leading-5 text-[#b7c8c0]">
               Simulated actions require manager approval. Allergy guidance supports staff decisions and does not guarantee food safety.
             </p>
           </section>

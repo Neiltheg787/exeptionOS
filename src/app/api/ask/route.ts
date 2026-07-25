@@ -15,7 +15,7 @@ export async function POST(request: Request) {
     const memoryProvider = getMemoryProvider();
     const flow = await runAgentFlow({ query, branchId, scenarioId, memoryProvider });
     const engine = getDecisionEngine();
-    const decision = await engine.enhance({
+    const enhanced = await engine.enhance({
       scenario,
       query,
       memories: flow.decision.evidence,
@@ -26,13 +26,13 @@ export async function POST(request: Request) {
       query,
       scenario,
       routing: flow.routing,
-      decision,
+      decision: enhanced.decision,
       provider: flow.provider,
       providerStatus: flow.providerStatus,
       health: {
         memoryProvider: flow.provider,
-        decisionEngine:
-          process.env.OPENAI_API_KEY && process.env.OPENAI_MODEL ? "OPENAI" : "DETERMINISTIC",
+        decisionEngine: enhanced.status.provider,
+        decisionStatus: enhanced.status,
       },
     });
   } catch (error) {
