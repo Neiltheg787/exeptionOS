@@ -1,7 +1,51 @@
 import { agentRegistry } from "@/lib/agents/registry";
 import { routeRequest } from "@/lib/agents/orchestrator";
 import { aggregateDecision } from "@/lib/decision/aggregator";
-import type { AgentContext, AggregatedDecision, MemoryProvider, RoutingDecision } from "@/lib/types";
+import type {
+  AgentContext,
+  AgentMemoryTrace,
+  AgentResult,
+  AggregatedDecision,
+  MemoryProvider,
+  RestaurantMemory,
+  RoutingDecision,
+} from "@/lib/types";
+
+function buildAgentMemoryTrace(agentResults: AgentResult[], memories: RestaurantMemory[]): AgentMemoryTrace[] {
+  const memoryById = new Map(memories.map((memory) => [memory.id, memory]));
+  const usedMemoryIds = new Set<string>();
+  const traces = agentResults.map((result) => ({
+    agentId: result.agentId,
+    role: result.role,
+    dispatchReason: result.dispatchReason,
+    memories: [] as RestaurantMemory[],
+  }));
+
+  const candidatesFor = (result: AgentResult) => {
+    const evidenceMatches = result.evidenceIds
+      .map((id) => memoryById.get(id))
+      .filter(Boolean) as RestaurantMemory[];
+    const agentMatches = memories.filter((memory) => memory.agentIds?.includes(result.agentId));
+    const broadMatches = memories.filter((memory) => !memory.agentIds?.length);
+    return [...evidenceMatches, ...agentMatches, ...broadMatches, ...memories]
+      .filter((memory, index, list) => list.findIndex((item) => item.id === memory.id) === index)
+      .sort((a, b) => (b.similarityScore ?? 0) - (a.similarityScore ?? 0));
+  };
+
+  const assignOne = (trace: AgentMemoryTrace, result: AgentResult) => {
+    const nextMemory = candidatesFor(result).find((memory) => !usedMemoryIds.has(memory.id));
+    if (!nextMemory) return;
+    usedMemoryIds.add(nextMemory.id);
+    trace.memories.push(nextMemory);
+  };
+
+  traces.forEach((trace, index) => assignOne(trace, agentResults[index]!));
+  traces.forEach((trace, index) => {
+    if (trace.memories.length < 2) assignOne(trace, agentResults[index]!);
+  });
+
+  return traces;
+}
 
 export async function runAgentFlow(input: {
   query: string;
@@ -11,6 +55,7 @@ export async function runAgentFlow(input: {
 }): Promise<{
   routing: RoutingDecision;
   decision: AggregatedDecision;
+  agentMemoryTrace: AgentMemoryTrace[];
   providerStatus: string;
   provider: "XTRACE" | "MOCK" | "CACHE";
 }> {
@@ -57,6 +102,7 @@ export async function runAgentFlow(input: {
       agentResults,
       memories: recall.memories,
     }),
+    agentMemoryTrace: buildAgentMemoryTrace(agentResults, recall.memories),
     providerStatus: recall.message,
     provider: recall.provider,
   };

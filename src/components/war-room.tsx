@@ -18,6 +18,7 @@ import { defaultScenarioId, demoScenarios, getScenario } from "@/data/scenarios"
 import type {
   AggregatedDecision,
   AgentId,
+  AgentMemoryTrace,
   DemoScenario,
   IntegrationStatus,
   MemoryIngestResult,
@@ -29,6 +30,7 @@ type AskResponse = {
   scenario: DemoScenario;
   routing: RoutingDecision;
   decision: AggregatedDecision;
+  agentMemoryTrace: AgentMemoryTrace[];
   provider: "XTRACE" | "MOCK" | "CACHE";
   providerStatus: string;
   health: {
@@ -185,10 +187,7 @@ export function WarRoom() {
   }, [ask, resetScenario, response, saveOutcome, setActiveScenario]);
 
   const displayDecision = response?.decision;
-  const strongestMemories = useMemo(
-    () => (displayDecision?.evidence ?? []).slice(0, 2),
-    [displayDecision],
-  );
+  const agentMemoryTrace = useMemo(() => response?.agentMemoryTrace ?? [], [response]);
   const confidence = displayDecision?.confidence;
   const activeAgents = response
     ? [response.decision.primaryAgent, ...response.decision.supportingAgents]
@@ -345,18 +344,38 @@ export function WarRoom() {
             {displayDecision ? (
               <div className="mt-5 grid grid-cols-2 gap-5 max-lg:grid-cols-1">
                 <div>
-                  <p className="section-label mb-3">Strongest memories</p>
+                  <p className="section-label mb-3">Agent memories</p>
                   <div className="space-y-3">
-                    {strongestMemories.map((memory) => (
-                      <article key={memory.id} className="memory-card">
-                        <div className="flex items-center justify-between gap-3">
-                          <h3 className="font-medium text-white">{memory.title}</h3>
-                          <span className="rounded-full bg-cyan-300/10 px-2.5 py-1 text-[11px] text-cyan-100">
-                            {memory.memoryType}
+                    {agentMemoryTrace.map((trace) => (
+                      <section key={trace.agentId} className="rounded-lg border border-white/10 bg-white/[0.025] p-3">
+                        <div className="mb-3 flex items-center justify-between gap-3">
+                          <div>
+                            <h3 className="font-medium text-white">{trace.agentId}</h3>
+                            <p className="text-xs text-slate-400">{trace.role}</p>
+                          </div>
+                          <span className="rounded-full bg-violet-300/10 px-2.5 py-1 text-[11px] text-violet-100">
+                            {trace.memories.length} unique
                           </span>
                         </div>
-                        <p className="mt-2 line-clamp-3 leading-6 text-slate-300">{memory.content}</p>
-                      </article>
+                        <div className="space-y-2">
+                          {trace.memories.map((memory) => (
+                            <article key={`${trace.agentId}-${memory.id}`} className="memory-card">
+                              <div className="flex items-center justify-between gap-3">
+                                <h4 className="font-medium text-white">{memory.title}</h4>
+                                <span className="rounded-full bg-cyan-300/10 px-2.5 py-1 text-[11px] text-cyan-100">
+                                  {memory.memoryType}
+                                </span>
+                              </div>
+                              <p className="mt-2 line-clamp-3 leading-6 text-slate-300">{memory.content}</p>
+                            </article>
+                          ))}
+                          {trace.memories.length === 0 && (
+                            <div className="rounded-lg border border-dashed border-white/10 bg-white/[0.025] p-3 text-xs leading-5 text-slate-400">
+                              No unique memory remained for this supporting agent.
+                            </div>
+                          )}
+                        </div>
+                      </section>
                     ))}
                   </div>
                 </div>

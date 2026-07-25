@@ -27,6 +27,7 @@ export async function POST(request: Request) {
       scenario,
       routing: flow.routing,
       decision: enhanced.decision,
+      agentMemoryTrace: flow.agentMemoryTrace,
       provider: flow.provider,
       providerStatus: flow.providerStatus,
       health: {

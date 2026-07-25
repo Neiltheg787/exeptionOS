@@ -126,6 +126,13 @@ export type AgentResult = {
   requiresHumanConfirmation: boolean;
 };
 
+export type AgentMemoryTrace = {
+  agentId: AgentId;
+  role: "PRIMARY" | "SUPPORTING";
+  dispatchReason: string;
+  memories: RestaurantMemory[];
+};
+
 export type RoutingDecision = {
   primaryAgent: AgentId;
   supportingAgents: AgentId[];
